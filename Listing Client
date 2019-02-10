@@ -1,0 +1,121 @@
+//============================================================================
+// Name        : Client.cpp
+// Author      : Maxim Chernukhin
+// Version     : 1.0
+// Copyright   : Your copyright notice
+// Description : Client
+//============================================================================
+
+// 		Программа клиента просит пользователя ввести "идентификатор функции" на выбор предлогаются "0x1" и "0x0".
+// "0x1" отправляет серверу запрос о строке из случайных символов длиною 50.
+// "0x0" отправляет серверу запрос о Дате-Времени.
+// 		Размер пакета со случайной строкой занимает 54 байта (50 на строку, 1 на пробел, 3 на номер функции (от 1 до 999 возможных))
+// 		Размер пакета с Датой-Временем занимает 6 байт (2 байта на номер функции (unsigned short) и 4 байта на Дату-Время)
+// 		Изначально time_t представляет число объемом 8 байт, но при делении на 65535 (размер unsigned short) мы можем получить*
+// *получить 2 числа по 2 байта каждое- целая часть и остаток.
+// 		Деление на 65535 гарантирует, что остаток не превысит 2 байтовый unsigned short и переполнения не будет.
+// Переполнения целой части тоже не предусматривается (для превышения объема в 2 байта потребуется еще 100-120 лет (или около того)).
+// При получении клиентом Даты-Времени целая часть умножается на 65535 и прибавляется остаток == изначальное time(NULL).
+// Дальше номер функции и дата время преображаются в "человеческий" вид, объеденяются в одну строку и выводятся на экран.
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <stdio.h> // для print
+#include <cstdio> // для perror
+#include <stdlib.h> //для exit()
+#include <unistd.h> // для close
+#include <time.h> // для времени
+#include <iostream>
+#include <string.h> //для случайной строки
+
+struct{
+	unsigned short NumberOfFunction;
+	unsigned short CelayaChast;
+	unsigned short Ostatok;
+}  DateTime;
+
+using namespace std;
+
+char buf[1024]; // создание буфера размером сообщения для теста ЭХО-СЕРВЕРА
+string identificator;
+
+int main(){
+
+	cout<<"Введите идентификатор вызываемой функции: "<<endl;
+	cout<<"(\"0x0\" - запрос текущего значения даты-времени сервера)"<<endl;
+	cout<<"(\"0x1\" - запрос случайной строки из 50-ти символов)"<<endl;
+
+START:
+	cin>>identificator; //Запоминаем введенный пользователем идентификатор
+	const char * IdToServer = identificator.c_str();
+
+
+
+
+	int sock;
+	struct sockaddr_in addr;
+
+	sock = socket(AF_INET, SOCK_STREAM,0); //создаем сокет с интернет доменом
+	if(sock<0){
+		perror("socket"); // диагностические ошибки (1)
+		exit(1);
+	}
+
+	addr.sin_family = AF_INET;   // семейство интернет домена
+	addr.sin_port = htons(2100); // или любой другой порт
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); //используем loop для отладки на одной машине
+
+	if(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0){
+		perror("connect"); // диагностические ошибки (2)
+		exit(2);
+	}
+
+
+
+	send(sock, IdToServer, sizeof(IdToServer), 0); // отправляем серверу сокет с текстом
+
+
+	//DataRndStr RandomStr;
+	if (! strcmp(IdToServer,"0x1")){  // если запросом была случайная строка, то ожидаем ответа в виде строки на печать
+
+		char buf[54];
+		recv(sock, buf, 54, 0);     // получаем от сервера сокет с ответом
+		cout<<buf<<endl;
+
+		close(sock);            // закрываем сокет
+	}
+
+	if (! strcmp(IdToServer,"0x0")){   // если запросом была Дата-Время, то ожидаем ответа в виде структуры DateTime
+
+		recv(sock, &DateTime, 6, 0);  // принимаем структуру
+
+
+		char BufferTime[25];
+		time_t seconds = DateTime.CelayaChast*65535 + DateTime.Ostatok; // Расшифровываем 4-х байтовую запись Даты-Времени в секунды эпохи линукс
+		tm* timeinfo = localtime(&seconds);
+		char* format = "%d/%m/%Y %I:%M:%S";
+		strftime(BufferTime, 25, format, timeinfo);
+		cout<<DateTime.NumberOfFunction<<" "<<BufferTime<<endl;
+		//cout<<DateTime.NumberOfFunction<<" "<<tm_year<<"."<<t->tm_mon<<"."<<t->tm_year<<" "<<t->tm_hour<<":"<<t->tm_min<<":"t->tm_sec<<endl;
+
+		close(sock);            // закрываем сокет
+	}
+
+	if (strcmp(IdToServer,"0x1")&&strcmp(IdToServer, "0x0")){  // если запросом была не случайная строка и не Дата-Время, то *
+
+				cout<<"Неизвестный идентификатор! Попробуйте снова..."<<endl; // то сообщаем клиенту о неизвестном запросе и повторяем запрос
+
+				close(sock);            // закрываем сокет
+	}
+
+	goto START;
+
+
+
+
+
+
+
+	return 0;
+}

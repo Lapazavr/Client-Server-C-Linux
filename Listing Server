@@ -1,0 +1,134 @@
+//============================================================================
+// Name        : Serv.cpp
+// Author      : Maxim Chernukhin
+// Version     : 1.0
+// Copyright   : Your copyright notice
+// Description : Server
+//============================================================================
+
+// 		Программа сервера принимает "идентификатор функции" от пользователя.
+// Если идентификатор равен "0x1", то генерируется случайная строка, соединяется с номером функции и отправляется клиенту
+// Если идентификатор равен "0x0", то выводится time_t time(NULL) [количество секунд с 1970], сжимается посредством деления на ключ*
+// * и отправлется клиенту вместе с номером функции.
+// 		Размер пакета со случайной строкой занимает 54 байта (50 на строку, 1 на пробел, 3 на номер функции (от 1 до 999 возможных))
+// 		Размер пакета с Датой-Временем занимает 6 байт (2 байта на номер функции (unsigned short) и 4 байта на Дату-Время)
+// 		Изначально time_t представляет число объемом 8 байт, но при делении на 65535 (размер unsigned short) мы можем получить*
+// *получить 2 числа по 2 байта каждое- целая часть и остаток.
+// 		Деление на 65535 гарантирует, что остаток не превысит 2 байтовый unsigned short и переполнения не будет.
+// Переполнения целой части тоже не предусматривается (для превышения объема в 2 байта потребуется еще 100-120 лет (или около того)).
+// При получении клиентом Даты-Времени целая часть умножается на 65535 и прибавляется остаток == изначальное time(NULL).
+// Дальше номер функции и дата время преображаются в "человеческий" вид, объеденяются в одну строку и выводятся на экран.
+
+
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <cstdio> // для perror
+#include <stdlib.h> //для exit()
+#include <unistd.h> // для close
+#include <time.h> // для времени
+#include <iostream>
+#include <string.h> //для случайной строки
+#include <sstream>
+
+
+using namespace std;
+
+
+struct{                              // структура для отправки информации о Дате-Времени и номере функции клиенту
+	unsigned short NumberOfFunction; // номер функции
+	unsigned short CelayaChast;      // целая часть при делении time(NULL) на 65535
+	unsigned short Ostatok;          // остаток при делении time(NULL) на 65535
+}  DateTime;                         // деление позволяет сжать Дату-Время до 4 байт (65535 позволяет не выйти остатку за пределы*
+                                     // *за пределы unsigned short (и целая часть и остаток занимают по 2 байта)
+
+
+string RandStr(int n){       // функция генерирует строку из n случайных символов
+	srand(time(0));
+	string stroka;
+	for(int i= 0; i< n; i++){
+			char a = char(rand()%(127-32+1)+32);
+			char b[1]={0};						 //диапазон от ascii 32 (меньше идут системные символы) и до 127 (выше идет кирилица)
+			b[0]=a;
+			string str=b;
+			stroka+=str;
+	}
+	return stroka;
+}
+
+int main(){
+
+	int sock, listener;
+	struct sockaddr_in addr;
+	char buf[1024];
+	string bufer;
+	int bytes_read;
+	int NumberOfFunction=0;
+
+	listener = socket(AF_INET, SOCK_STREAM,0);
+	if(listener < 0){
+		perror("socket"); //диагностические ошибки (1)
+		exit(1);
+	}
+
+	addr.sin_family = AF_INET; 							// семейство адрессов интернет домена
+	addr.sin_port = htons(2100); 						//номер порта соединения (для примера. использовать можно любой другой)
+	addr.sin_addr.s_addr = htonl(INADDR_ANY); 			//ip-адрес используется любой
+	if(bind(listener, (struct sockaddr *)&addr, sizeof(addr)) <0 ){ //
+		perror("bind"); // диагностические ошибки (2)
+		exit(2);
+	}
+
+	listen(listener, 1); // создание очередь запросов от клиента
+
+	while(1){
+		sock = accept(listener, NULL, NULL);
+		if(sock < 0){
+			perror("accept"); // диагностические ошибки (3)
+			exit(3);
+		}
+
+		while(1){
+			bytes_read = recv(sock, buf, 1024, 0); // если есть соединение и ошибок не возникает,
+			if(bytes_read <=0) break;              // то считываем запрос от клиента в переменную
+			if (! strcmp(buf,"0x1")){
+				bufer = RandStr(50);      // если запросом была случайная строка, то сгенерим и занесем строку в buf
+				NumberOfFunction+=1;
+
+
+
+				stringstream s;                       //переводим число номера функции в string
+				s<<NumberOfFunction;
+				string ToClient = s.str() + " " + bufer; // склеиваем строку из номера функции и рандомной строки в 50 символов
+				const char * RandToClient = ToClient.c_str(); // готовую строку готовим для отправки клиенту
+
+
+
+				send(sock, RandToClient, 54, 0);        // а после отправляем эту случайную строку клиенту
+
+			}
+			if (! strcmp(buf,"0x0")){
+
+					NumberOfFunction+=1;
+
+					time_t t=time(NULL); // находим время в виде кол-ва секунд эпохи линукс
+
+							unsigned short cel=t/65535; // находим целую часть при делении секунд на 65535
+							unsigned short ost=t%65535; // находим остаток при делении секунд на 65535
+
+							DateTime.NumberOfFunction=NumberOfFunction;
+							DateTime.CelayaChast=cel;
+							DateTime.Ostatok=ost;
+
+
+					send(sock, &DateTime, 6, 0);        // а после отправляем эту случайную строку клиенту
+
+			}
+		}
+		close(sock);
+
+	}
+
+	return 0;
+}
